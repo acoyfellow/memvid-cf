@@ -2,7 +2,7 @@ import QRCode from 'qrcode-svg'
 
 export async function generateEmbedding(text: string, ai: any): Promise<number[]> {
   const resp = await ai.run('@cf/baai/bge-base-en-v1.5', { text })
-  return resp.data[0] // The response is typically nested
+  return resp.data
 }
 
 export function cosineSimilarity(a: number[], b: number[]): number {

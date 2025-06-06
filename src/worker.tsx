@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import type { FC } from 'hono/jsx'
-import { cosineSimilarity, generateEmbedding, generateQRCodeSVG } from './utils'
+import { cosineSimilarity, generateQRCodeSVG } from './utils'
 import type { CloudflareEnv } from './env'
 
 const app = new Hono<{ Bindings: CloudflareEnv & { AI: any } }>()
@@ -325,10 +325,15 @@ const HomePage: FC = () => {
             });
             
             if (response.ok) {
-              const svgText = await response.text();
+              const data = await response.json();
               result.innerHTML = 
                 '<div style="color: #38a169; font-weight: 600;">🎯 Found matching QR code!</div>' +
-                '<div class="qr-display">' + svgText + '</div>' +
+                '<div style="margin: 1rem 0; padding: 1rem; background: #f0f8ff; border-radius: 8px; border-left: 4px solid #4299e1;">' +
+                  '<h4 style="margin: 0 0 0.5rem 0; color: #2d3748;">Original Text (ID: ' + data.id + '):</h4>' +
+                  '<p style="margin: 0; white-space: pre-wrap; font-family: Georgia, serif; line-height: 1.6;">' + data.text + '</p>' +
+                  '<small style="color: #718096; margin-top: 0.5rem; display: block;">Similarity Score: ' + (data.score * 100).toFixed(1) + '%</small>' +
+                '</div>' +
+                '<div class="qr-display">' + data.qrCode + '</div>' +
                 '<p style="text-align: center; color: #718096;">Right-click to save the QR code</p>';
               result.style.display = 'block';
             } else if (response.status === 404) {
@@ -372,7 +377,13 @@ app.post('/encode', async (c) => {
     const { text, id } = data
     const svg = generateQRCodeSVG(text)
     await c.env.QR_BUCKET.put(`${id}.svg`, svg)
-    const embedding = await generateEmbedding(text, c.env.AI)
+    
+    // Use AI binding directly
+    const embeddingResp = await c.env.AI.run('@cf/baai/bge-base-en-v1.5', { text })
+    console.log('🧠 Encode embedding response:', embeddingResp)
+    const embedding = embeddingResp.data[0] || embeddingResp.data
+    console.log('🧠 Encode embedding length:', embedding.length)
+    
     await c.env.DB.prepare(
       'INSERT INTO entries (id, text, embedding) VALUES (?, ?, ?)'
     ).bind(id, text, JSON.stringify(embedding)).run()
@@ -393,8 +404,16 @@ app.post('/query', async (c) => {
     }
 
     const { prompt } = data
-    const queryVec = await generateEmbedding(prompt, c.env.AI)
+    console.log('🔍 Searching for:', prompt)
+    
+    // Use AI binding directly
+    const queryResp = await c.env.AI.run('@cf/baai/bge-base-en-v1.5', { text: prompt })
+    console.log('🧠 Query embedding response:', queryResp)
+    const queryVec = queryResp.data[0] || queryResp.data
+    console.log('🧠 Query embedding length:', queryVec.length)
+    
     const { results } = await c.env.DB.prepare('SELECT * FROM entries').all()
+    console.log('📊 Found entries in DB:', results?.length || 0)
     
     if (!results || results.length === 0) {
       return c.notFound()
@@ -403,24 +422,34 @@ app.post('/query', async (c) => {
     let bestMatch: any = null
     let bestScore = -Infinity
     for (const row of results) {
-      const score = cosineSimilarity(queryVec, JSON.parse(row.embedding))
+      const storedEmbedding = JSON.parse(row.embedding)
+      const score = cosineSimilarity(queryVec, storedEmbedding)
+      console.log(`📈 Score for "${row.id}": ${score}`)
       if (score > bestScore) {
         bestScore = score
         bestMatch = row
       }
     }
     
-    if (!bestMatch) {
+    console.log('🎯 Best match:', bestMatch?.id, 'with score:', bestScore)
+    
+    if (!bestMatch || bestScore < 0.1) { // Add minimum threshold
       return c.notFound()
     }
     
     const qr = await c.env.QR_BUCKET.get(`${bestMatch.id}.svg`)
     if (!qr) {
+      console.log('❌ QR code not found in bucket for:', bestMatch.id)
       return c.notFound()
     }
     
-    return new Response(await qr.text(), {
-      headers: { 'Content-Type': 'image/svg+xml' },
+    // Return both QR code and text as JSON
+    return c.json({
+      id: bestMatch.id,
+      text: bestMatch.text,
+      qrCode: await qr.text(),
+      score: bestScore,
+      createdAt: bestMatch.created_at
     })
   } catch (error) {
     console.error('Query error:', error)
