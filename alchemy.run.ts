@@ -4,6 +4,7 @@ import {
   R2Bucket,
   Worker,
   WranglerJson,
+  Ai,
 } from "alchemy/cloudflare";
 
 const BRANCH_PREFIX = process.env.BRANCH_PREFIX ?? process.env.USER ?? "";
@@ -24,13 +25,16 @@ export const qrBucket = await R2Bucket(`qr-bucket${BRANCH_PREFIX}`, {
   adopt: true,
 });
 
+// Create AI binding
+export const ai = new Ai();
+
 // Create the main worker
 export const worker = await Worker(`memvid-worker${BRANCH_PREFIX}`, {
   entrypoint: "./src/worker.tsx",
   bindings: {
     DB: database,
     QR_BUCKET: qrBucket,
-    AI: "@cf/baai/bge-base-en-v1.5",
+    AI: ai,
   },
   url: true,
   bundle: {
