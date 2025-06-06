@@ -1,0 +1,31 @@
+{
+  "name": "memvid-cf",
+  "version": "0.1.0",
+  "description": "Cloudflare-native E2E QR+Embedding worker based on Memvid",
+  "main": "src/worker.tsx",
+  "types": "src/worker.tsx",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "bun run ./alchemy.run.ts",
+    "destroy": "bun run ./alchemy.run.ts --destroy",
+    "build": "echo 'no build step needed'",
+    "db:local": "wrangler d1 migrations apply memvid-db --local"
+  },
+  "keywords": [
+    "cloudflare",
+    "workers",
+    "qr",
+    "embedding",
+    "ai",
+    "memvid"
+  ],
+  "author": "Jordan Coeyman",
+  "license": "MIT",
+  "dependencies": {
+    "alchemy": "^0.24.1",
+    "hono": "^4.7.11",
+    "qrcode-svg": "^1.1.0",
+    "wrangler": "^4.19.1"
+  }
+}
