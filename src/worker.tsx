@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import type { FC } from 'hono/jsx'
+import { z } from 'zod'
 import { cosineSimilarity, generateQRCodeSVG } from './utils'
 import type { CloudflareEnv } from './env'
 
@@ -13,55 +14,30 @@ app.use('*', cors({
   allowHeaders: ['Content-Type'],
 }))
 
-// Input validation helpers
-function validateInput(data: any): { isValid: boolean; error?: string } {
-  if (!data || typeof data !== 'object') {
-    return { isValid: false, error: 'Invalid JSON data' }
+// Zod schemas for validation
+const EncodeSchema = z.object({
+  text: z.string().min(1, 'Text is required').max(10000, 'Text must be less than 10,000 characters'),
+  id: z.string()
+    .min(1, 'ID is required')
+    .max(100, 'ID must be less than 100 characters')
+    .regex(/^[a-zA-Z0-9_-]+$/, 'ID can only contain letters, numbers, hyphens, and underscores')
+})
+
+const QuerySchema = z.object({
+  prompt: z.string().min(1, 'Prompt is required').max(1000, 'Prompt must be less than 1,000 characters')
+})
+
+// TypeScript types derived from Zod schemas
+type EncodeRequest = z.infer<typeof EncodeSchema>
+type QueryRequest = z.infer<typeof QuerySchema>
+
+// Helper function to handle Zod validation
+function validateRequest<T>(schema: z.ZodSchema<T>, data: unknown): { success: true; data: T } | { success: false; error: string } {
+  const result = schema.safeParse(data)
+  if (result.success) {
+    return { success: true, data: result.data }
   }
-  return { isValid: true }
-}
-
-function validateEncodeInput(data: any): { isValid: boolean; error?: string } {
-  const baseValidation = validateInput(data)
-  if (!baseValidation.isValid) return baseValidation
-
-  if (!data.text || typeof data.text !== 'string') {
-    return { isValid: false, error: 'Text field is required and must be a string' }
-  }
-  
-  if (!data.id || typeof data.id !== 'string') {
-    return { isValid: false, error: 'ID field is required and must be a string' }
-  }
-
-  if (data.text.length > 10000) {
-    return { isValid: false, error: 'Text must be less than 10,000 characters' }
-  }
-
-  if (data.id.length > 100) {
-    return { isValid: false, error: 'ID must be less than 100 characters' }
-  }
-
-  // Sanitize ID to prevent injection
-  if (!/^[a-zA-Z0-9_-]+$/.test(data.id)) {
-    return { isValid: false, error: 'ID can only contain letters, numbers, hyphens, and underscores' }
-  }
-
-  return { isValid: true }
-}
-
-function validateQueryInput(data: any): { isValid: boolean; error?: string } {
-  const baseValidation = validateInput(data)
-  if (!baseValidation.isValid) return baseValidation
-
-  if (!data.prompt || typeof data.prompt !== 'string') {
-    return { isValid: false, error: 'Prompt field is required and must be a string' }
-  }
-
-  if (data.prompt.length > 1000) {
-    return { isValid: false, error: 'Prompt must be less than 1,000 characters' }
-  }
-
-  return { isValid: true }
+  return { success: false, error: result.error.errors[0]?.message || 'Validation failed' }
 }
 
 // Layout component
@@ -367,14 +343,14 @@ app.get('/', (c) => {
 
 app.post('/encode', async (c) => {
   try {
-    const data = await c.req.json()
-    const validation = validateEncodeInput(data)
+    const requestData = await c.req.json()
+    const validation = validateRequest(EncodeSchema, requestData)
     
-    if (!validation.isValid) {
+    if (!validation.success) {
       return c.json({ error: validation.error }, 400)
     }
 
-    const { text, id } = data
+    const { text, id } = validation.data
     const svg = generateQRCodeSVG(text)
     await c.env.QR_BUCKET.put(`${id}.svg`, svg)
     
@@ -396,14 +372,14 @@ app.post('/encode', async (c) => {
 
 app.post('/query', async (c) => {
   try {
-    const data = await c.req.json()
-    const validation = validateQueryInput(data)
+    const requestData = await c.req.json()
+    const validation = validateRequest(QuerySchema, requestData)
     
-    if (!validation.isValid) {
+    if (!validation.success) {
       return c.json({ error: validation.error }, 400)
     }
 
-    const { prompt } = data
+    const { prompt } = validation.data
     console.log('🔍 Searching for:', prompt)
     
     // Use AI binding directly
@@ -433,7 +409,7 @@ app.post('/query', async (c) => {
     
     console.log('🎯 Best match:', bestMatch?.id, 'with score:', bestScore)
     
-    if (!bestMatch || bestScore < 0.1) { // Add minimum threshold
+    if (!bestMatch || bestScore < 0.6) { // Set threshold to 60% for good semantic matching
       return c.notFound()
     }
     
